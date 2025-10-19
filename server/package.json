@@ -1,0 +1,17 @@
+{
+  "name": "universe-multiplayer-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node ./src/server.js",
+    "dev": "NODE_ENV=development node ./src/server.js"
+  },
+  "dependencies": {
+    "uuid": "^9.0.1",
+    "ws": "^8.17.0"
+  },
+  "optionalDependencies": {
+    "wrtc": "^0.4.7"
+  }
+}

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Unendliches Universum</title>
+  </head>
+  <body>
+  <!-- Mobile HUD Toggle -->
+  <button class="hud-toggle" id="hudToggle" aria-label="Menü umschalten" title="Menü">☰</button>
+  <!-- View switcher: Space <-> Ship Interior -->
+  <button class="view-switch" id="viewSwitch" aria-label="Ansicht wechseln" title="Ansicht wechseln">Innen</button>
+  <!-- Landing controls -->
+  <button class="land-btn" id="landBtn" aria-label="Landen" title="Auf Planet/Mond landen" style="display:none">Landen</button>
+  <button class="land-btn" id="takeoffBtn" aria-label="Abheben" title="Abheben" style="display:none; right: 50%; transform: translateX(50%);">Abheben</button>
+    <!-- Hauptrenderziel des Canvas-Universums -->
+    <canvas id="universe"></canvas>
+
+    <!-- Mobile bottom action bar -->
+    <div class="mobile-bar" id="mobileBar" aria-label="Mobile Steuerung">
+      <button id="mb_view" aria-label="Ansicht wechseln">Innen</button>
+      <button id="mb_land" aria-label="Landen" style="display:none">Landen</button>
+      <button id="mb_beam" aria-label="Beamen" style="display:none">Beamen</button>
+    </div>
+
+    <!-- Mobile D-Pad for isometric movement -->
+    <div id="dpad" class="dpad" aria-label="Bewegungssteuerung" style="display:none">
+      <button data-dir="nw" aria-label="Links-Oben">↖</button>
+      <div class="mid">
+        <button data-dir="left" aria-label="Links">←</button>
+        <button data-dir="right" aria-label="Rechts">→</button>
+      </div>
+      <button data-dir="se" aria-label="Rechts-Unten">↘</button>
+    </div>
+
+    <!-- Steuerungs‑HUD (Benutzeroberfläche) -->
+    <div class="hud" id="hud">
+      <h1>UNENDLICHES UNIVERSUM</h1>
+      <label for="seed">Seed</label>
+      <input id="seed" type="text" value="sol-42" />
+  <label for="playerName">Dein Name</label>
+  <input id="playerName" type="text" value="" placeholder="Spielername" />
+      <div class="row">
+        <button id="regen">Neu</button>
+        <button id="pause">Pause</button>
+        <label style="margin:0 0 0 8px"><input type="checkbox" id="labels" checked /> Labels</label>
+        <label style="margin:0 0 0 8px"><input type="checkbox" id="followShip" /> Follow Ship</label>
+      </div>
+      <label>Render</label>
+      <div class="row" style="flex-wrap:wrap; gap:10px 12px; width:240px;">
+        <label><input type="checkbox" id="renderStars" checked /> Sterne</label>
+        <label><input type="checkbox" id="renderPlanets" checked /> Planeten</label>
+        <label><input type="checkbox" id="renderOrbits" checked /> Orbits</label>
+        <label><input type="checkbox" id="renderMoons" checked /> Monde</label>
+        <label><input type="checkbox" id="renderCities" checked /> Städte</label>
+        <label><input type="checkbox" id="renderGrid" checked /> Gitter</label>
+        <label><input type="checkbox" id="renderShips" checked /> Schiffe</label>
+      </div>
+      <label for="zoomSpeed">Zoom Speed</label>
+      <input id="zoomSpeed" type="range" min="0.2" max="2.0" step="0.1" value="1.0" />
+      <label for="starDensity">Stern-Dichte</label>
+      <input id="starDensity" type="range" min="0.2" max="2.0" step="0.1" value="1.0" />
+      <label for="planetDensity">Planeten-Dichte</label>
+      <input id="planetDensity" type="range" min="0.2" max="2.0" step="0.1" value="1.0" />
+      <label for="shipCount">Schiffe</label>
+      <input id="shipCount" type="number" min="0" max="64" step="1" value="12" />
+      <label for="animSpeed">Anim-Geschwindigkeit</label>
+      <input id="animSpeed" type="range" min="0.1" max="3.0" step="0.1" value="1.0" />
+    </div>
+
+    <div class="legend">
+      <div id="scaleLabel">Bereich: Mondbahn</div>
+      <div id="scaleDetail">ca. Ausdehnung: 770.000 km</div>
+    </div>
+
+    <div class="help">
+      Welt: Ziehen/Ein-Finger=Pan, Rad/Pinch=Zoom, Doppeltipp/-klick=Fullscreen, Tipp/Klick auf Planet=Fokus, Long-Tap=Ziel setzen<br />
+      Innenansicht: Tipp/Klick=Gehe zu Feld, Tipp auf Stuhl=Sitzen, Pinch=Zoom, Ziehen=Pan
+    </div>
+
+    <div class="fps" id="fps">– FPS</div>
+
+    <div class="panel" id="planetInfo" style="display: none;">
+      <h2 id="pi_name">Planet</h2>
+      <div><span class="l">Typ:</span> <span class="v" id="pi_type">–</span></div>
+      <div class="l" id="pi_stats">–</div>
+      <div class="l" id="pi_env">–</div>
+    </div>
+
+    <div class="panel" id="shipInfo" style="right: 12px; bottom: 220px; display: block;">
+      <h2>Schiff</h2>
+      <div class="l">Position: <span class="v" id="si_pos">–</span></div>
+      <div class="l">Geschwindigkeit: <span class="v" id="si_speed">–</span></div>
+      <div class="l">Ziel: <span class="v" id="si_target">–</span></div>
+      <div class="l">Entfernung: <span class="v" id="si_dist">–</span></div>
+      <div class="l">ETA: <span class="v" id="si_eta">–</span></div>
+    </div>
+
+    <div class="panel" id="selectionInfo" style="right: 12px; bottom: 380px; display: none;">
+      <h2 id="sel_kind">Auswahl</h2>
+      <div class="l">Name: <span class="v" id="sel_name">–</span></div>
+      <div class="l">Typ: <span class="v" id="sel_type">–</span></div>
+      <div class="l">Pfad: <span class="v" id="sel_path">–</span></div>
+      <div class="l" id="sel_stats">–</div>
+      <div class="row"><button id="sel_fly">Hinfliegen</button></div>
+    </div>
+
+    <div class="panel" id="chatPanel" style="left: 12px; bottom: 12px; width: 360px;">
+      <h2>Chat</h2>
+      <div id="chatBox" style="height: 160px; overflow:auto; background: rgba(0,0,0,0.35); padding:6px; font-family: monospace; font-size:12px;"></div>
+      <div class="row" style="gap:6px; margin-top:6px;">
+        <input id="chatInput" placeholder="Nachricht (regional)" style="flex:1" />
+        <button id="chatSend">Senden</button>
+      </div>
+      <div class="row" style="gap:6px; margin-top:6px;">
+        <input id="pmTarget" placeholder="Ziel-Hash" style="width: 100px" />
+        <input id="pmInput" placeholder="Privatnachricht" style="flex:1" />
+        <button id="pmSend">PM</button>
+      </div>
+    </div>
+
+    <!-- Einstiegspunkt der Anwendung als ES‑Modul -->
+    <script type="module" src="/src/main.js"></script>
+  </body>
+  </html>

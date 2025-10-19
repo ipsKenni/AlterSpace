@@ -1,0 +1,288 @@
+/*
+ * Haupt-Stylesheet für das Universum-Projekt
+ * 
+ * Best Practices:
+ * - Trennung von Struktur (HTML) und Darstellung (CSS)
+ * - Verwendung semantischer Klassen
+ * - Kommentare auf Deutsch zur besseren Wartbarkeit
+ */
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #02060f;
+  color: #bff;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans,
+    Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+canvas#universe {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  cursor: crosshair;
+  /* Allow custom gesture handling on mobile without page scroll */
+  touch-action: none;
+}
+
+/* View switcher */
+.view-switch {
+  position: fixed;
+  z-index: 10;
+  top: env(safe-area-inset-top, 8px);
+  right: env(safe-area-inset-right, 8px);
+  margin: 8px;
+  min-width: 68px;
+  height: 42px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 255, 220, 0.35);
+  background: rgba(0, 20, 35, 0.6);
+  color: #bff;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.land-btn {
+  position: fixed;
+  z-index: 10;
+  bottom: calc(env(safe-area-inset-bottom, 8px) + 16px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 40, 25, 0.8);
+  color: #cfc;
+  border: 1px solid rgba(0, 255, 160, 0.5);
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 16px;
+}
+
+/* Interior canvas sits on top when active */
+#interiorCanvas {
+  position: fixed;
+  left: 0; top: 0; right: 0; bottom: 0;
+  width: 100vw; height: 100vh;
+  display: none;
+  touch-action: none;
+}
+
+#surfaceCanvas {
+  position: fixed;
+  left: 0; top: 0; right: 0; bottom: 0;
+  width: 100vw; height: 100vh;
+  display: none;
+  touch-action: none;
+}
+
+.hud {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 6;
+  background: rgba(0, 15, 30, 0.66);
+  border: 1px solid rgba(0, 255, 220, 0.35);
+  box-shadow: 0 0 18px rgba(0, 255, 200, 0.15) inset;
+  color: #bff;
+  padding: 10px 12px;
+  border-radius: 8px;
+  backdrop-filter: blur(4px);
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+}
+
+.hud h1 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  color: #7ff;
+}
+
+.hud label {
+  display: block;
+  font-size: 12px;
+  margin: 6px 0 2px;
+  color: #9ef;
+}
+
+.hud input[type="text"],
+.hud input[type="number"],
+.hud input[type="range"] {
+  width: 220px;
+}
+
+.hud .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.hud button {
+  background: #022;
+  color: #7ff;
+  border: 1px solid #0aa;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.hud button:hover {
+  background: #033;
+}
+
+.legend {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 6;
+  background: rgba(0, 15, 30, 0.5);
+  border: 1px solid rgba(0, 255, 220, 0.25);
+  color: #adf;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  max-width: 240px;
+}
+
+.help {
+  position: fixed;
+  bottom: 12px;
+  left: 12px;
+  z-index: 6;
+  background: rgba(0, 10, 20, 0.5);
+  border: 1px solid rgba(0, 255, 220, 0.2);
+  color: #9df;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.fps {
+  position: fixed;
+  bottom: 12px;
+  right: 12px;
+  z-index: 6;
+  color: #7ff;
+  font: 12px monospace;
+  text-shadow: 0 0 10px rgba(0, 255, 255, 0.25);
+}
+
+.panel {
+  position: fixed;
+  right: 12px;
+  bottom: 72px;
+  z-index: 6;
+  min-width: 260px;
+  max-width: 340px;
+  background: rgba(0, 20, 35, 0.6);
+  border: 1px solid rgba(0, 255, 220, 0.25);
+  color: #cfe;
+  padding: 10px 12px;
+  border-radius: 8px;
+  display: none;
+}
+
+.panel h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #8ff;
+}
+
+.panel .l {
+  color: #9df;
+}
+
+.panel .v {
+  color: #efe;
+}
+
+/* Mobile bottom action bar */
+.mobile-bar {
+  position: fixed;
+  left: 0; right: 0;
+  bottom: 0;
+  height: calc(56px + env(safe-area-inset-bottom, 0px));
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+  display: none;
+  gap: 8px;
+  justify-content: center;
+  background: linear-gradient(180deg, rgba(0,20,35,0.0), rgba(0,20,35,0.65));
+  z-index: 8;
+  backdrop-filter: blur(6px);
+}
+.mobile-bar button {
+  flex: 1 1 0;
+  min-width: 100px;
+  max-width: 180px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 255, 220, 0.35);
+  background: rgba(0, 30, 50, 0.8);
+  color: #bff;
+  font-size: 14px;
+}
+
+/* Mobile HUD Toggle button */
+.hud-toggle {
+  position: fixed;
+  z-index: 10;
+  top: env(safe-area-inset-top, 8px);
+  left: env(safe-area-inset-left, 8px);
+  margin: 8px;
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 255, 220, 0.35);
+  background: rgba(0, 20, 35, 0.6);
+  color: #bff;
+  font-size: 20px;
+  line-height: 42px;
+  text-align: center;
+  cursor: pointer;
+  display: none; /* hidden on desktop by default */
+}
+
+/* Responsive adjustments */
+@media (max-width: 900px) {
+  .hud { left: 8px; top: 56px; width: min(92vw, 420px); }
+  .hud input[type="text"],
+  .hud input[type="number"],
+  .hud input[type="range"] { width: 100%; }
+  .legend { right: 8px; top: auto; bottom: 12px; max-width: 48vw; }
+  .help { left: 8px; right: 8px; bottom: calc(env(safe-area-inset-bottom, 8px) + 8px); font-size: 11px; }
+  .panel { right: 8px; bottom: 72px; max-width: 90vw; min-width: unset; }
+  .hud-toggle { display: block; }
+  body { overscroll-behavior: none; }
+  .mobile-bar { display: flex; }
+  /* Nudge ship info up to not overlap mobile bar */
+  #shipInfo { bottom: 120px !important; }
+}
+
+/* Mobile D-Pad */
+.dpad {
+  position: fixed;
+  left: 8px;
+  bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+  z-index: 8;
+  display: none;
+  gap: 4px;
+  flex-direction: column;
+}
+.dpad .mid { display: flex; gap: 4px; justify-content: center; }
+.dpad button {
+  width: 48px; height: 48px;
+  border-radius: 50%;
+  border: 1px solid rgba(0,255,220,0.35);
+  background: rgba(0,30,50,0.7);
+  color: #bff; font-size: 18px;
+}
+@media (max-width: 900px) {
+  .dpad { display: flex; }
+}
+
+/* Ultra small screens */
+@media (max-width: 520px) {
+  .legend { display: none; }
+}
