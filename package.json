@@ -10,7 +10,8 @@
     "dev": "pnpm -r dev",
     "dev:client": "pnpm --filter client dev",
     "dev:server": "pnpm --filter server dev",
-    "build": "pnpm --filter client build",
-    "start": "pnpm --filter server start"
+    "build": "pnpm -r build",
+    "start": "pnpm --filter server start",
+    "test": "pnpm -r test"
   }
 }

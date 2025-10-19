@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "rootDir": "src",
+    "outDir": "dist",
+    "moduleDetection": "force",
+    "allowImportingTsExtensions": false
+  },
+  "include": ["src"],
+  "exclude": ["dist", "node_modules"]
+}
