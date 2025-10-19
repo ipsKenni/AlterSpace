@@ -19,12 +19,22 @@ interface PinchState {
   center: { x: number; y: number };
 }
 
+export interface ZoomInfo {
+  type: 'wheel' | 'pinch';
+  delta: number;
+  screen: Vec2;
+  worldBefore: Vec2;
+  worldAfter: Vec2;
+  zoom: number;
+}
+
 export interface InputDelegate {
   onKeyDown?(event: KeyboardEvent): void;
   onDragStart?(event: MouseEvent): void;
   onDrag?(dx: number, dy: number, event: MouseEvent | TouchEvent): boolean | void;
   onDragEnd?(event: MouseEvent | TouchEvent): void;
   onTap?(x: number, y: number): void;
+  onZoom?(info: ZoomInfo): void;
   playerShip?: { target: Vec2 };
 }
 
@@ -97,10 +107,22 @@ export class InputController {
         const zoomFactor = Math.pow(1.1, -event.deltaY / 100) ** this.settings.zoomSpeed;
         const mouse = new Vec2(event.clientX, event.clientY);
         const before = this.camera.screenToWorld(mouse, this.canvas);
-        this.camera.zoom = Math.min(this.camera.maxZoom, Math.max(this.camera.minZoom, this.camera.zoom * zoomFactor));
+        const targetZoom = Math.min(this.camera.maxZoom, Math.max(this.camera.minZoom, this.camera.zoom * zoomFactor));
+        const smoothing = 0.35;
+        const newZoom = this.camera.zoom + (targetZoom - this.camera.zoom) * smoothing;
+        this.camera.zoom = newZoom;
         const after = this.camera.screenToWorld(mouse, this.canvas);
         this.camera.pos.x += before.x - after.x;
         this.camera.pos.y += before.y - after.y;
+        const finalWorld = this.camera.screenToWorld(mouse, this.canvas);
+        this.delegate?.onZoom?.({
+          type: 'wheel',
+          delta: event.deltaY,
+          screen: mouse,
+          worldBefore: before,
+          worldAfter: finalWorld,
+          zoom: this.camera.zoom,
+        });
       },
       { passive: false },
     );
@@ -191,11 +213,25 @@ export class InputController {
           const distance = dist(first, second);
           const scale = Math.max(0.2, Math.min(5, distance / (this.pinch.startDist || 1)));
           const before = this.camera.screenToWorld(new Vec2(this.pinch.center.x, this.pinch.center.y), this.canvas);
-          const targetZoom = this.pinch.lastZoom * scale ** this.settings.zoomSpeed;
-          this.camera.zoom = Math.min(this.camera.maxZoom, Math.max(this.camera.minZoom, targetZoom));
+          const rawZoom = this.pinch.lastZoom * scale ** this.settings.zoomSpeed;
+          const targetZoom = Math.min(this.camera.maxZoom, Math.max(this.camera.minZoom, rawZoom));
+          const smoothing = 0.35;
+          const newZoom = this.camera.zoom + (targetZoom - this.camera.zoom) * smoothing;
+          this.camera.zoom = newZoom;
+          this.pinch.lastZoom = newZoom;
           const after = this.camera.screenToWorld(new Vec2(this.pinch.center.x, this.pinch.center.y), this.canvas);
           this.camera.pos.x += before.x - after.x;
           this.camera.pos.y += before.y - after.y;
+          const finalWorld = this.camera.screenToWorld(new Vec2(this.pinch.center.x, this.pinch.center.y), this.canvas);
+          const delta = -Math.log(Math.max(scale, 1e-6)) * 120;
+          this.delegate?.onZoom?.({
+            type: 'pinch',
+            delta,
+            screen: new Vec2(this.pinch.center.x, this.pinch.center.y),
+            worldBefore: before,
+            worldAfter: finalWorld,
+            zoom: this.camera.zoom,
+          });
         } else if (this.dragging && this.touches.size === 1) {
           const [point] = [...this.touches.values()];
           if (!point) {

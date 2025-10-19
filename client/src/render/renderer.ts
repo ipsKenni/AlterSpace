@@ -21,11 +21,6 @@ export interface RendererSettings extends GenerationSettings {
   animSpeed: number;
 }
 
-export type Selection =
-  | { kind: 'star'; star: Star }
-  | { kind: 'planet'; planet: Planet; star?: Star }
-  | { kind: 'moon'; planet: Planet; moon: Moon; star?: Star };
-
 export type ScreenObject =
   | { kind: 'star'; obj: Star; x: number; y: number; r: number }
   | { kind: 'planet'; obj: Planet; x: number; y: number; r: number }
@@ -57,7 +52,8 @@ export class Renderer {
 
   time = 0;
   focusPlanet: Planet | null = null;
-  selection: Selection | null = null;
+  focusMoon: Moon | null = null;
+  focusMoonPlanet: Planet | null = null;
   visibleObjectsScreen: ScreenObject[] = [];
   visiblePlanetsScreen: ScreenPlanet[] = [];
 
@@ -203,9 +199,6 @@ export class Renderer {
 
     this.visibleObjectsScreen.push({ kind: 'star', obj: star, x: screen.x, y: screen.y, r: radiusScreen });
 
-    if (this.selection?.kind === 'star' && this.selection.star === star) {
-      this.drawSelectionRing(star.pos.x, star.pos.y, radius * 1.6);
-    }
   }
 
   private drawPlanets(chunk: Chunk, dt: number): void {
@@ -303,10 +296,6 @@ export class Renderer {
 
     if (this.focusPlanet === planet) {
       this.drawSelectionRing(planet.pos.x, planet.pos.y, planet.radius * 1.08);
-    }
-
-    if (this.selection?.kind === 'planet' && this.selection.planet === planet) {
-      this.drawSelectionRing(planet.pos.x, planet.pos.y, planet.radius * 1.2);
     }
   }
 
@@ -409,7 +398,7 @@ export class Renderer {
       const radiusScreen = Math.max(4, moon.r * this.camera.zoom);
       this.visibleObjectsScreen.push({ kind: 'moon', obj: { planet, moon }, x: screen.x, y: screen.y, r: radiusScreen });
 
-      if (this.selection?.kind === 'moon' && this.selection.moon === moon) {
+      if (this.focusMoon === moon && this.focusMoonPlanet === planet) {
         this.drawSelectionRing(moonX, moonY, moon.r * 1.6);
       }
     }
