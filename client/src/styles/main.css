@@ -13,6 +13,104 @@ body {
   -webkit-user-select: none;
 }
 
+.hidden {
+  display: none !important;
+}
+
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 2000;
+  padding: 24px;
+}
+
+.auth-card {
+  background: rgba(0, 20, 40, 0.95);
+  border: 1px solid rgba(100, 255, 255, 0.35);
+  border-radius: 16px;
+  padding: 28px 32px;
+  width: min(90vw, 360px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 16px 48px rgba(0, 200, 255, 0.35), inset 0 1px 0 rgba(100, 255, 255, 0.25);
+}
+
+.auth-card h1 {
+  font-size: 20px;
+  text-align: center;
+  letter-spacing: 0.08em;
+  color: #9ef;
+  text-shadow: 0 0 12px rgba(100, 255, 255, 0.6);
+}
+
+.auth-copy {
+  font-size: 14px;
+  text-align: center;
+  line-height: 1.5;
+  color: rgba(187, 255, 255, 0.85);
+}
+
+.auth-card label {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #bff;
+}
+
+.auth-card input {
+  padding: 10px 14px;
+  background: rgba(0, 35, 70, 0.75);
+  border: 1px solid rgba(100, 255, 255, 0.3);
+  border-radius: 8px;
+  color: #bff;
+  font-size: 15px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.auth-card input:focus {
+  border-color: rgba(100, 255, 255, 0.6);
+  box-shadow: 0 0 18px rgba(100, 255, 255, 0.4);
+  background: rgba(0, 45, 90, 0.85);
+}
+
+.auth-card button[type="submit"] {
+  padding: 12px;
+  background: linear-gradient(135deg, rgba(0, 170, 220, 0.9), rgba(0, 120, 180, 0.9));
+  border: 1px solid rgba(100, 255, 255, 0.4);
+  border-radius: 10px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-shadow: 0 0 10px rgba(100, 255, 255, 0.6);
+}
+
+.auth-card button[type="submit"]:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 0 22px rgba(100, 255, 255, 0.6);
+}
+
+.auth-card button[type="submit"]:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.auth-error {
+  min-height: 18px;
+  font-size: 13px;
+  color: #ff9999;
+  text-align: center;
+}
+
 #canvas {
   display: block;
   width: 100vw;
@@ -313,6 +411,7 @@ body {
   border-radius: 3px;
   outline: none;
   cursor: pointer;
+  appearance: none;
   -webkit-appearance: none;
 }
 

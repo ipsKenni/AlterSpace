@@ -3,6 +3,7 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { v4 as uuidv4 } from 'uuid';
@@ -16,6 +17,9 @@ const CONFIG = {
     maxInterest: 128,
     stunServers: [{ urls: 'stun:stun.l.google.com:19302' }],
 };
+const WORLD_SEED = process.env.WORLD_SEED?.trim() || `sol-${crypto.randomBytes(6).toString('hex')}`;
+const registrationsByToken = new Map();
+const registrationsByName = new Map();
 const OPC = {
     UPDATE: 0x75,
     SNAPSHOT: 0x73,
@@ -259,6 +263,48 @@ function safeSendChannel(dc, payload) {
         /* ignore */
     }
 }
+function extractTokenFromAuth(header) {
+    if (!header) {
+        return null;
+    }
+    const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+    if (!match) {
+        return null;
+    }
+    const token = match[1]?.trim();
+    return token && token.length <= 128 ? token : null;
+}
+function lookupRegistration(token) {
+    if (!token) {
+        return null;
+    }
+    return registrationsByToken.get(token) ?? null;
+}
+function normaliseName(name) {
+    return name.trim().toLowerCase();
+}
+async function readRequestBody(req, limit = 10_000) {
+    const chunks = [];
+    let total = 0;
+    await new Promise((resolve, reject) => {
+        req.on('data', (chunk) => {
+            total += chunk.length;
+            if (total > limit) {
+                reject(new Error('Payload too large'));
+                return;
+            }
+            chunks.push(chunk);
+        });
+        req.on('end', () => resolve());
+        req.on('error', (err) => reject(err));
+    });
+    return Buffer.concat(chunks).toString('utf8');
+}
+function sendJson(res, statusCode, payload) {
+    res.statusCode = statusCode;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.end(JSON.stringify(payload));
+}
 function createStaticServer() {
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
@@ -300,7 +346,74 @@ function createStaticServer() {
             res.end(data);
         });
     };
-    return http.createServer((req, res) => {
+    return http.createServer(async (req, res) => {
+        let requestUrl;
+        try {
+            requestUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+        }
+        catch {
+            sendJson(res, 400, { error: 'Bad request' });
+            return;
+        }
+        const method = req.method ?? 'GET';
+        const pathname = requestUrl.pathname;
+        if (pathname === '/api/config' && method === 'GET') {
+            const token = extractTokenFromAuth(req.headers.authorization);
+            const registration = lookupRegistration(token);
+            sendJson(res, 200, {
+                seed: WORLD_SEED,
+                session: registration ? { name: registration.name } : null,
+            });
+            return;
+        }
+        if (pathname === '/api/register' && method === 'POST') {
+            try {
+                const raw = await readRequestBody(req);
+                let parsed;
+                try {
+                    parsed = JSON.parse(raw || '{}');
+                }
+                catch {
+                    sendJson(res, 400, { error: 'Ungültiges JSON' });
+                    return;
+                }
+                const body = parsed && typeof parsed === 'object' ? parsed : {};
+                const nameRaw = typeof body.name === 'string' ? body.name : '';
+                const name = nameRaw.trim();
+                if (name.length < 3 || name.length > 24) {
+                    sendJson(res, 400, { error: 'Name muss 3-24 Zeichen lang sein.' });
+                    return;
+                }
+                if (!/^[A-Za-z0-9 _\-]+$/.test(name)) {
+                    sendJson(res, 400, { error: 'Name darf nur Buchstaben, Zahlen, Leerzeichen, - und _ enthalten.' });
+                    return;
+                }
+                const key = normaliseName(name);
+                if (registrationsByName.has(key)) {
+                    sendJson(res, 409, { error: 'Name bereits registriert.' });
+                    return;
+                }
+                const token = uuidv4();
+                const record = {
+                    id: uuidv4(),
+                    name,
+                    token,
+                    createdAt: Date.now(),
+                };
+                registrationsByToken.set(token, record);
+                registrationsByName.set(key, record);
+                sendJson(res, 201, { token, name, seed: WORLD_SEED });
+            }
+            catch (error) {
+                if (error.message === 'Payload too large') {
+                    sendJson(res, 413, { error: 'Anfrage zu groß.' });
+                }
+                else {
+                    sendJson(res, 500, { error: 'Serverfehler.' });
+                }
+            }
+            return;
+        }
         const root = staticRoot ?? resolveStaticRoot();
         if (!root) {
             res.statusCode = 503;
@@ -310,7 +423,7 @@ function createStaticServer() {
         }
         staticRoot = root;
         try {
-            const requestPath = decodeURIComponent((req.url ?? '/').split('?')[0] ?? '/');
+            const requestPath = decodeURIComponent((requestUrl.pathname || '/'));
             if (!requestPath || requestPath === '/') {
                 sendFile(res, path.join(root, 'index.html'));
                 return;
@@ -572,7 +685,37 @@ const messageHelpers = {
     forwardBeamRequest,
     forwardBeamResponse,
 };
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+    let requestUrl;
+    try {
+        requestUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    }
+    catch {
+        safeSend(ws, JSON.stringify({ type: 'error', code: 'bad_request' }));
+        setTimeout(() => {
+            try {
+                ws.close(4400, 'bad request');
+            }
+            catch {
+                ws.terminate();
+            }
+        }, 0);
+        return;
+    }
+    const token = requestUrl.searchParams.get('token');
+    const registration = lookupRegistration(token);
+    if (!registration) {
+        safeSend(ws, JSON.stringify({ type: 'error', code: 'registration_required' }));
+        setTimeout(() => {
+            try {
+                ws.close(4401, 'registration required');
+            }
+            catch {
+                ws.terminate();
+            }
+        }, 0);
+        return;
+    }
     const id = uuidv4();
     const pc = wrtc ? new wrtc.RTCPeerConnection({ iceServers: CONFIG.stunServers }) : null;
     const connections = { ws, pc, dc: null };
@@ -582,12 +725,13 @@ wss.on('connection', (ws) => {
         x: 0,
         y: 0,
         lastSeen: Date.now(),
-        name: '',
+        name: registration.name,
         scene: 0,
         body: 0,
         tileX: 0,
         tileY: 0,
         ship: 0,
+        registrationToken: registration.token,
     };
     playerStore.add(player);
     if (pc) {
@@ -652,6 +796,6 @@ wss.on('connection', (ws) => {
             /* ignore */
         }
     });
-    safeSend(ws, JSON.stringify({ type: 'welcome', id, mode: wrtc ? 'webrtc' : 'ws' }));
+    safeSend(ws, JSON.stringify({ type: 'welcome', id, mode: wrtc ? 'webrtc' : 'ws', seed: WORLD_SEED, name: registration.name }));
 });
 startSnapshotLoop(playerStore);

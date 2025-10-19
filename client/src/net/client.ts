@@ -45,6 +45,7 @@ export interface RemoteMoveEvent {
 export interface NetClientOptions {
   url?: string;
   onSnapshot?: (list: SnapshotEntry[]) => void;
+  token?: string;
 }
 
 type MaybeDataChannel = RTCDataChannel | null;
@@ -64,6 +65,7 @@ export class NetClient {
   private lastPositionSend = 0;
   private lastStateSend = 0;
   private fallbackWS = false;
+  private readonly token: string;
 
   id: string | null = null;
   connected = false;
@@ -73,14 +75,24 @@ export class NetClient {
   onBeamResponse: ((event: BeamResponseEvent) => void) | null = null;
   onRemoteMove: ((event: RemoteMoveEvent) => void) | null = null;
 
-  constructor({ url = 'ws://localhost:8080', onSnapshot }: NetClientOptions) {
+  constructor({ url = 'ws://localhost:8080', onSnapshot, token = '' }: NetClientOptions) {
     this.url = url;
     this.onSnapshot = onSnapshot;
+    this.token = token;
   }
 
   async connect(): Promise<boolean> {
     return new Promise((resolve) => {
-      this.ws = new WebSocket(this.url);
+      let settled = false;
+      const settle = (value: boolean) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(value);
+      };
+      const targetUrl = this.composeUrl();
+      this.ws = new WebSocket(targetUrl);
       this.ws.binaryType = 'arraybuffer';
       this.ws.onopen = async () => {
         if (typeof RTCPeerConnection !== 'undefined') {
@@ -91,7 +103,7 @@ export class NetClient {
           channel.onopen = () => {
             this.connected = true;
             this.sendNameIfAny();
-            resolve(true);
+            settle(true);
           };
           channel.onmessage = (event) => {
             if (!(event.data instanceof ArrayBuffer)) {
@@ -114,7 +126,7 @@ export class NetClient {
             ws.send(JSON.stringify({ type: 'offer', sdp: offer.sdp }));
           }
         } else {
-          this.enableWSFallback(resolve);
+          this.enableWSFallback(settle);
         }
       };
       this.ws.onmessage = async (event) => {
@@ -185,14 +197,25 @@ export class NetClient {
               x: Number(message.x ?? 0),
               y: Number(message.y ?? 0),
             });
+          } else if (type === 'error') {
+            const code = typeof message.code === 'string' ? message.code : '';
+            if (code === 'registration_required') {
+              this.connected = false;
+              try {
+                this.ws?.close();
+              } catch {
+                /* ignore */
+              }
+            }
           }
         } catch {
           /* ignore malformed payloads */
         }
       };
-      this.ws.onerror = () => resolve(false);
+      this.ws.onerror = () => settle(false);
       this.ws.onclose = () => {
         this.connected = false;
+        settle(false);
       };
     });
   }
@@ -205,6 +228,20 @@ export class NetClient {
     this.connected = true;
     if (resolve) {
       resolve(true);
+    }
+  }
+
+  private composeUrl(): string {
+    if (!this.token) {
+      return this.url;
+    }
+    try {
+      const target = new URL(this.url);
+      target.searchParams.set('token', this.token);
+      return target.toString();
+    } catch {
+      const separator = this.url.includes('?') ? '&' : '?';
+      return `${this.url}${separator}token=${encodeURIComponent(this.token)}`;
     }
   }
 

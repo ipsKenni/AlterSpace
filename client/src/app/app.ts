@@ -35,6 +35,12 @@ interface AppSettings extends RendererSettings {
   signalUrl: string;
 }
 
+interface UniverseAppOptions {
+  seed: string;
+  token: string;
+  playerName: string;
+}
+
 interface AutoFocusState {
   targetZoom: number;
   speed: number;
@@ -98,6 +104,8 @@ export class UniverseApp {
   readonly settings: AppSettings;
   manager: ChunkManager;
   readonly renderer: Renderer;
+  private readonly authToken: string;
+  private readonly initialPlayerName: string;
 
   readonly interiorCanvas: HTMLCanvasElement;
   readonly interior: ShipInterior;
@@ -135,7 +143,11 @@ export class UniverseApp {
     this.camera.pos.y = pos.y;
   }
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, options?: UniverseAppOptions) {
+    const seed = options?.seed?.trim() || 'sol-42';
+    this.authToken = options?.token ?? '';
+    this.initialPlayerName = options?.playerName?.trim() || 'Du';
+
     this.canvas = canvas;
     this.camera = new Camera();
 
@@ -143,7 +155,7 @@ export class UniverseApp {
     const configuredSignalUrl = typeof env['VITE_SIGNAL_URL'] === 'string' ? String(env['VITE_SIGNAL_URL']) : '';
 
     this.settings = {
-      seed: 'sol-42',
+      seed,
       starDensity: 1,
       planetDensity: 1,
       shipCount: 12,
@@ -161,6 +173,11 @@ export class UniverseApp {
       multiplayer: true,
       signalUrl: configuredSignalUrl,
     };
+
+    const nameInputBootstrap = document.getElementById('playerName') as HTMLInputElement | null;
+    if (nameInputBootstrap && !nameInputBootstrap.value.trim()) {
+      nameInputBootstrap.value = this.initialPlayerName;
+    }
 
     this.manager = new ChunkManager(this.settings.seed);
     this.renderer = new Renderer(canvas, this.camera, this.manager, this.settings);
@@ -213,9 +230,14 @@ export class UniverseApp {
   // region --- Initialisation helpers -------------------------------------------------------
 
   private setupNetworking(): void {
+    if (!this.authToken) {
+      console.warn('[net] Multiplayer deaktiviert: kein Registrierungstoken.');
+      return;
+    }
     const url = this.settings.signalUrl || this._computeSignalUrl();
     const client = new NetClient({
       url,
+      token: this.authToken,
       onSnapshot: (list) => this._applySnapshot(list),
     });
 
@@ -245,7 +267,13 @@ export class UniverseApp {
   private resolvePlayerName(): string {
     const playerNameInput = document.getElementById('playerName') as HTMLInputElement | null;
     const value = playerNameInput?.value?.trim();
-    return value && value.length ? value : 'Du';
+    if (value && value.length) {
+      return value;
+    }
+    if (this.initialPlayerName) {
+      return this.initialPlayerName;
+    }
+    return 'Du';
   }
 
   private _initStartView(): void {
@@ -653,13 +681,7 @@ export class UniverseApp {
     }
 
     if (seed && seed !== this.settings.seed) {
-      this.settings.seed = seed;
-      const seedInput = this.getElement<HTMLInputElement>('seed');
-      if (seedInput) {
-        seedInput.value = seed;
-      }
-      this._regen();
-      return;
+      console.warn('[app] Seed-Wechsel via URL wird ignoriert (Server-seed ist verbindlich).');
     }
 
     if (!id && view) {
@@ -795,6 +817,15 @@ export class UniverseApp {
     const seedInput = this.getElement<HTMLInputElement>('seed');
     if (seedInput) {
       seedInput.value = this.settings.seed;
+      seedInput.readOnly = true;
+      seedInput.setAttribute('aria-readonly', 'true');
+      seedInput.title = 'Seed wird vom Server vorgegeben';
+    }
+
+    const regenButton = this.getElement<HTMLButtonElement>('regen');
+    if (regenButton) {
+      regenButton.disabled = true;
+      regenButton.title = 'Seed wird vom Server vorgegeben';
     }
 
     this.bindButton('regen', () => {
@@ -950,6 +981,9 @@ export class UniverseApp {
     if (!nameInput) {
       return;
     }
+    if (!nameInput.value && this.initialPlayerName) {
+      nameInput.value = this.initialPlayerName;
+    }
     try {
       const saved = localStorage.getItem('playerName');
       if (saved) {
@@ -957,6 +991,9 @@ export class UniverseApp {
       }
     } catch {
       /* ignore */
+    }
+    if (!nameInput.value && this.initialPlayerName) {
+      nameInput.value = this.initialPlayerName;
     }
 
     const applyName = () => {
