@@ -7,11 +7,11 @@
 import { Vec2 } from '../core/math.ts';
 import { PRNG } from '../core/prng.ts';
 import { Camera } from '../core/camera.ts';
-import { InputController } from '../core/input.ts';
+import { InputController, type ZoomInfo } from '../core/input.ts';
 import { WORLD } from './constants.ts';
 import { ChunkManager } from './chunks.ts';
 import { PlayerShip, Ship } from './model.ts';
-import { Renderer, type RendererSettings, type RenderShip, type ScreenObject, type Selection } from '../render/renderer.ts';
+import { Renderer, type RendererSettings, type RenderShip, type ScreenObject } from '../render/renderer.ts';
 import { NetClient, type BeamRequestEvent, type BeamResponseEvent, type ChatEvent, type RemoteMoveEvent } from '../net/client.ts';
 import { ScaleTiers } from './scale.ts';
 import { ShipInterior } from '../interior/interior.ts';
@@ -87,15 +87,28 @@ const enum SceneId {
   Interior = 2,
 }
 
-const PLANET_INFO_ID = 'planetInfo';
-const SELECTION_PANEL_ID = 'selectionInfo';
 const CHAT_BOX_ID = 'chatBox';
 const CHAT_NEARBY_ID = 'nearbyList';
 const HUD_ID = 'hud';
 
+const ZOOM_INDICATOR_ID = 'zoomIndicator';
+
 const D_PAD_QUERY = '(max-width: 900px)';
 const PICK_DISTANCE_THRESHOLD = 30;
 const LAND_DISTANCE_THRESHOLD = 40;
+
+const SHIP_PROXIMITY_THRESHOLD = 1800; // world units radius around the player ship for auto transitions
+const SHIP_ENV_VIEW_WIDTH = 6000; // viewport width (world units) at which we snap to ship surroundings
+const SHIP_ENV_EXIT_VIEW_WIDTH = 8500; // hysteresis to release auto-follow when zooming out again
+const SHIP_INTERIOR_VIEW_WIDTH = 1200; // viewport width to enter ship interior automatically
+const PLANET_SURFACE_VIEW_WIDTH = 2600; // viewport width to enter planetary surface view
+const PLANET_SURFACE_EXIT_VIEW_WIDTH = 3900; // wider viewport needed before leaving surface view again
+const SHIP_INTERIOR_EXIT_VIEW_WIDTH = 4000; // viewport width needed before leaving ship interior view
+const LAND_SHIP_DISTANCE = 1800; // world units distance required between ship and body center for landing
+
+type FocusTarget =
+  | { kind: 'planet'; planet: Planet }
+  | { kind: 'moon'; planet: Planet; moon: Moon };
 
 export class UniverseApp {
   readonly canvas: HTMLCanvasElement;
@@ -112,8 +125,8 @@ export class UniverseApp {
   readonly surfaceCanvas: HTMLCanvasElement;
   readonly surface: SurfaceView;
 
+  private focusTarget: FocusTarget | null = null;
   focusPlanet: Planet | null = null;
-  selection: Selection | null = null;
   autoFocus: AutoFocusState | null = null;
   readonly input: InputController;
 
@@ -129,6 +142,10 @@ export class UniverseApp {
   private _fpsAcc = 0;
   private _lastViewStr = '';
   private _beamPresence: BeamPresence = { scene: SceneId.Space, body: 0, tileX: 0, tileY: 0, ship: 0 };
+  private _autoFollowActive = false;
+  private _autoFollowPrev = false;
+  private _autoFollowCooldownUntil = 0;
+  private _handleAltViewWheel: (event: WheelEvent) => void;
 
   currentId: string | null = null;
   running = true;
@@ -210,7 +227,27 @@ export class UniverseApp {
       },
     });
 
-    this.focusPlanet = null;
+    this._handleAltViewWheel = (event: WheelEvent) => {
+      if (this.view === ViewMode.Space) {
+        return;
+      }
+      event.preventDefault();
+      const pointer = new Vec2(event.clientX, event.clientY);
+      const world = this.camera.screenToWorld(pointer, this.canvas);
+      this.onZoom({
+        type: 'wheel',
+        delta: event.deltaY,
+        screen: pointer,
+        worldBefore: world,
+        worldAfter: world.clone(),
+        zoom: this.camera.zoom,
+      });
+    };
+
+  this.interiorCanvas.addEventListener('wheel', this._handleAltViewWheel, { passive: false });
+  this.surfaceCanvas.addEventListener('wheel', this._handleAltViewWheel, { passive: false });
+
+  this._clearFocus();
     this.playerShip = new PlayerShip(new Vec2(0, 0));
     this.input = new InputController(canvas, this.camera, this.settings, this);
     this._spawnShips();
@@ -349,13 +386,10 @@ export class UniverseApp {
 
     window.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
-        this.focusPlanet = null;
-        this.renderer.focusPlanet = null;
+        this._clearFocus();
         this.autoFocus = null;
-        const panel = this.getElement<HTMLElement>(PLANET_INFO_ID);
-        if (panel) {
-          panel.style.display = 'none';
-        }
+        this.currentId = null;
+        this._setHash(null);
       }
     });
 
@@ -370,6 +404,9 @@ export class UniverseApp {
     const world = this.camera.screenToWorld(new Vec2(clientX, clientY), this.canvas);
     const pick = this._pickObject(world);
     if (!pick) {
+      this._clearFocus();
+      this.currentId = null;
+      this._setHash(null);
       return;
     }
     this._selectFromPick(pick);
@@ -506,81 +543,59 @@ export class UniverseApp {
     dpad.style.display = shouldShow ? 'flex' : 'none';
   }
 
-  private _setSelection(selection: Selection | null): void {
-    this.selection = selection;
-    this.renderer.selection = selection;
-    this._updateSelectionPanel();
+  private _clearFocus(): void {
+    this.focusTarget = null;
+    this.focusPlanet = null;
+    this.renderer.focusPlanet = null;
+    this.renderer.focusMoon = null;
+    this.renderer.focusMoonPlanet = null;
   }
 
-  private _updateSelectionPanel(): void {
-    const panel = this.getElement<HTMLElement>(SELECTION_PANEL_ID);
-    if (!panel) {
-      return;
-    }
-    if (!this.selection) {
-      panel.style.display = 'none';
-      return;
-    }
-
-    const selection = this.selection;
-
-    const kindEl = this.getElement<HTMLElement>('sel_kind');
-    const nameEl = this.getElement<HTMLElement>('sel_name');
-    const typeEl = this.getElement<HTMLElement>('sel_type');
-    const pathEl = this.getElement<HTMLElement>('sel_path');
-    const statsEl = this.getElement<HTMLElement>('sel_stats');
-
-    if (!kindEl || !nameEl || !typeEl || !pathEl || !statsEl) {
-      return;
+  private _focusBody(target: FocusTarget, autoZoom: boolean): void {
+    this._disableAutoFollowWithCooldown();
+    this.focusTarget = target;
+    this.focusPlanet = target.planet;
+    this.renderer.focusPlanet = target.planet;
+    if (target.kind === 'moon') {
+      this.renderer.focusMoon = target.moon;
+      this.renderer.focusMoonPlanet = target.planet;
+    } else {
+      this.renderer.focusMoon = null;
+      this.renderer.focusMoonPlanet = null;
     }
 
-    let name = '–';
-    let type = '–';
-    let path = '–';
-    let stats = '';
+    const focusPos = this._focusBodyPosition(target);
+    this.setCameraPosition(focusPos);
 
-    if (selection.kind === 'star') {
-      name = selection.star.id;
-      type = `Stern ${selection.star.type}`;
-      path = 'Stern';
-      stats = `Leuchtkraft: ${selection.star.lum.toFixed(2)} • Größe: ${selection.star.size.toFixed(0)} wu`;
-    } else if (selection.kind === 'planet') {
-      const starLabel = selection.star?.id ?? 'Stern';
-      name = selection.planet.name;
-      type = `${selection.planet.type}${selection.planet.hasRings ? ' • Ringe' : ''}`;
-      path = `Planet → ${starLabel}`;
-      stats = `Radius: ${selection.planet.radius.toFixed(0)} wu • Monde: ${selection.planet.moons.length}`;
-    } else if (selection.kind === 'moon') {
-      const starLabel = selection.star?.id ?? 'Stern';
-      const index = selection.moon.index ?? 0;
-      name = `${selection.planet.name} – Mond ${index + 1}`;
-      type = 'Mond';
-      path = `Mond → Planet ${selection.planet.name} → ${starLabel}`;
-      stats = `Mond-Radius: ${selection.moon.r.toFixed(0)} wu • Bahn: ${(selection.planet.radius + selection.moon.dist).toFixed(0)} wu`;
+    if (autoZoom) {
+      const baseZoom = target.kind === 'moon' ? Math.max(30, this.camera.zoom * 1.9) : Math.max(25, this.camera.zoom * 1.8);
+      this.autoFocus = { targetZoom: baseZoom, speed: 2.2 };
     }
+  }
 
-    kindEl.textContent = selection.kind.charAt(0).toUpperCase() + selection.kind.slice(1);
-    nameEl.textContent = name;
-    typeEl.textContent = type;
-    pathEl.textContent = path;
-    statsEl.textContent = stats;
-
-    panel.style.display = 'block';
+  private _focusBodyPosition(target: FocusTarget): Vec2 {
+    if (target.kind === 'planet') {
+      return target.planet.pos.clone();
+    }
+    const planet = target.planet;
+    const moon = target.moon;
+    const orbitRadius = planet.radius + moon.dist;
+    return new Vec2(
+      planet.pos.x + Math.cos(moon.ang) * orbitRadius,
+      planet.pos.y + Math.sin(moon.ang) * orbitRadius,
+    );
   }
 
   private _focusPlanet(planet: Planet, autoZoom: boolean): void {
-    this.focusPlanet = planet;
-    this.renderer.focusPlanet = planet;
-    this.setCameraPosition(planet.pos);
-    if (autoZoom) {
-      const targetZoom = Math.max(25, this.camera.zoom * 1.8);
-      this.autoFocus = { targetZoom, speed: 2.2 };
-    }
+    this._focusBody({ kind: 'planet', planet }, autoZoom);
+  }
+
+  private _focusMoon(planet: Planet, moon: Moon, autoZoom: boolean): void {
+    this._focusBody({ kind: 'moon', planet, moon }, autoZoom);
   }
 
   private _focusStar(star: Star): void {
-    this.focusPlanet = null;
-    this.renderer.focusPlanet = null;
+    this._clearFocus();
     this.setCameraPosition(star.pos);
     this.autoFocus = null;
   }
@@ -608,22 +623,13 @@ export class UniverseApp {
   private _selectFromPick(pick: ScreenObject): void {
     if (pick.kind === 'star') {
       this._focusStar(pick.obj);
-      this._setSelection({ kind: 'star', star: pick.obj });
       this.currentId = pick.obj.id;
     } else if (pick.kind === 'planet') {
       this._focusPlanet(pick.obj, true);
-      const star = pick.obj.star;
-      const selection: Selection = star ? { kind: 'planet', planet: pick.obj, star } : { kind: 'planet', planet: pick.obj };
-      this._setSelection(selection);
       this.currentId = pick.obj.id;
     } else {
       const { planet, moon } = pick.obj;
-      this._focusPlanet(planet, true);
-      const star = planet.star;
-      const selection: Selection = star
-        ? { kind: 'moon', planet, moon, star }
-        : { kind: 'moon', planet, moon };
-      this._setSelection(selection);
+      this._focusMoon(planet, moon, true);
       this.currentId = moon.id;
     }
     this._setHash(this.currentId);
@@ -692,8 +698,7 @@ export class UniverseApp {
       if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
         this.setCameraPosition(new Vec2(x, y));
         this.camera.zoom = Math.min(this.camera.maxZoom, Math.max(this.camera.minZoom, z));
-        this.focusPlanet = null;
-        this.renderer.focusPlanet = null;
+        this._clearFocus();
         this.autoFocus = null;
       }
     }
@@ -760,7 +765,7 @@ export class UniverseApp {
         const planet = star?.planets[planetIndex] ?? null;
         const moon = planet?.moons[moonIndex] ?? null;
         if (planet && moon) {
-          this._focusPlanet(planet, true);
+          this._focusMoon(planet, moon, true);
         }
       }
     }
@@ -894,43 +899,12 @@ export class UniverseApp {
     });
 
     this.setupNameInput();
-    this.setupFlightControls();
     this.setupChatControls();
 
     window.addEventListener('keypress', (event) => {
       if (event.key.toLowerCase() === 'r') {
         this._initStartView();
-        this.focusPlanet = null;
-        this.renderer.focusPlanet = null;
-      }
-    });
-  }
-
-  private setupFlightControls(): void {
-    const flyButton = this.getElement<HTMLButtonElement>('sel_fly');
-    if (!flyButton) {
-      return;
-    }
-    flyButton.addEventListener('click', () => {
-      if (!this.selection) {
-        return;
-      }
-      let target: Vec2 | null = null;
-      if (this.selection.kind === 'star') {
-        target = this.selection.star.pos.clone();
-      } else if (this.selection.kind === 'planet') {
-        target = this.selection.planet.pos.clone();
-      } else if (this.selection.kind === 'moon') {
-        const moon = this.selection.moon;
-        const planet = this.selection.planet;
-        target = new Vec2(
-          planet.pos.x + Math.cos(moon.ang) * (planet.radius + moon.dist),
-          planet.pos.y + Math.sin(moon.ang) * (planet.radius + moon.dist),
-        );
-      }
-      if (target) {
-        this.playerShip.target = target;
-        this.net?.sendMoveTarget(target.x, target.y);
+        this._clearFocus();
       }
     });
   }
@@ -1109,39 +1083,8 @@ export class UniverseApp {
       detail.textContent = `ca. Ausdehnung: ${tier.pretty}`;
     }
 
-    this.updatePlanetInfo();
     this.updateShipInfo();
     this.updateNearbyPlayers();
-  }
-
-  private updatePlanetInfo(): void {
-    const panel = this.getElement<HTMLElement>(PLANET_INFO_ID);
-    if (!panel) {
-      return;
-    }
-    if (!this.focusPlanet) {
-      panel.style.display = 'none';
-      return;
-    }
-
-    panel.style.display = 'block';
-    const planet = this.focusPlanet;
-
-    const nameEl = this.getElement<HTMLElement>('pi_name');
-    const typeEl = this.getElement<HTMLElement>('pi_type');
-    const statsEl = this.getElement<HTMLElement>('pi_stats');
-    const envEl = this.getElement<HTMLElement>('pi_env');
-    if (!nameEl || !typeEl || !statsEl || !envEl) {
-      return;
-    }
-
-    const deg = (value: number) => `${value.toFixed(0)}°`;
-    const hours = (value: number) => `${value.toFixed(1)} h`;
-
-    nameEl.textContent = planet.name;
-    typeEl.textContent = `${planet.type}${planet.hasRings ? ' • Ringe' : ''}`;
-    statsEl.textContent = `Radius: ${planet.radius.toFixed(0)} wu • Masse: ${planet.mass.toFixed(1)} M⊕ • g: ${planet.gravity.toFixed(1)} m/s² • Tag: ${hours(planet.dayLength)} • Achse: ${deg(planet.axialTilt)}`;
-    envEl.textContent = `Temperatur: ${planet.temperature.toFixed(0)} K • Atmosphäre: ${planet.atmosphere} • Monde: ${planet.moons.length}`;
   }
 
   private updateShipInfo(): void {
@@ -1249,6 +1192,119 @@ export class UniverseApp {
 
   // endregion
 
+  // region --- View transitions ------------------------------------------------------------
+
+  private _switchView(next: ViewMode): void {
+    if (this.view === next) {
+      return;
+    }
+    this.view = next;
+    this._updateViewSwitch?.();
+    this._sendPresence();
+  }
+
+  private _setFollowShipEnabled(enabled: boolean): void {
+    this.settings.followShip = enabled;
+    const follow = this.getElement<HTMLInputElement>('followShip');
+    if (follow) {
+      follow.checked = enabled;
+    }
+  }
+
+  private _enableAutoFollow(): void {
+    if (this._autoFollowActive) {
+      return;
+    }
+    this._autoFollowPrev = this.settings.followShip;
+    if (!this.settings.followShip) {
+      this._setFollowShipEnabled(true);
+    }
+    this._autoFollowActive = true;
+    this._autoFollowCooldownUntil = 0;
+  }
+
+  private _disableAutoFollow(): void {
+    if (!this._autoFollowActive) {
+      return;
+    }
+    if (!this._autoFollowPrev) {
+      this._setFollowShipEnabled(false);
+    }
+    this._autoFollowActive = false;
+  }
+
+  private _disableAutoFollowWithCooldown(durationMs = 800): void {
+    const now = performance.now();
+    this._autoFollowCooldownUntil = Math.max(this._autoFollowCooldownUntil, now + Math.max(0, durationMs));
+    this._disableAutoFollow();
+  }
+
+  private _viewWidthWu(): number {
+    const dpr = window.devicePixelRatio || 1;
+    return (this.canvas.width / dpr) / this.camera.zoom;
+  }
+
+  private _setViewWidthWu(targetWidth: number): void {
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.max(1, targetWidth);
+    const desiredZoom = (this.canvas.width / dpr) / width;
+    this.camera.zoom = Math.min(this.camera.maxZoom, Math.max(this.camera.minZoom, desiredZoom));
+  }
+
+  private _updateAutoViewFromZoom(): void {
+    if (this.view !== ViewMode.Space) {
+      this._disableAutoFollow();
+      return;
+    }
+
+    const now = performance.now();
+    const viewWidthWu = this._viewWidthWu();
+    const shipDx = this.camera.pos.x - this.playerShip.pos.x;
+    const shipDy = this.camera.pos.y - this.playerShip.pos.y;
+    const shipDistance = Math.hypot(shipDx, shipDy);
+    const nearShip = shipDistance <= SHIP_PROXIMITY_THRESHOLD;
+
+    if (nearShip && viewWidthWu <= SHIP_INTERIOR_VIEW_WIDTH) {
+      this._disableAutoFollow();
+      this._clearFocus();
+      this.autoFocus = null;
+      this.currentId = null;
+      this._setHash(null);
+      this._switchView(ViewMode.Interior);
+      return;
+    }
+
+    if (nearShip && viewWidthWu <= SHIP_ENV_VIEW_WIDTH) {
+      if (now >= this._autoFollowCooldownUntil) {
+        this._enableAutoFollow();
+      }
+    } else if (viewWidthWu >= SHIP_ENV_EXIT_VIEW_WIDTH || !nearShip) {
+      this._disableAutoFollow();
+    }
+
+    if (this.focusTarget && viewWidthWu <= PLANET_SURFACE_VIEW_WIDTH) {
+      this._enterSurfaceFromFocus();
+    }
+  }
+
+  private _updateCameraFollow(dt: number): void {
+    if (this.view !== ViewMode.Space) {
+      return;
+    }
+    if (!this.settings.followShip) {
+      return;
+    }
+    const clampedDt = Math.max(0, Math.min(0.25, dt || 0));
+    const stiffness = this._autoFollowActive ? 10 : 4;
+    const alpha = 1 - Math.exp(-stiffness * clampedDt);
+    const targetX = this.playerShip.pos.x;
+    const targetY = this.playerShip.pos.y;
+    this.camera.pos.x += (targetX - this.camera.pos.x) * alpha;
+    this.camera.pos.y += (targetY - this.camera.pos.y) * alpha;
+  }
+
+  // endregion
+
   // region --- Game loop -------------------------------------------------------------------
 
   private _loop(): void {
@@ -1269,7 +1325,7 @@ export class UniverseApp {
 
       if (this.focusPlanet) {
         this.renderer.focusPlanet = this.focusPlanet;
-  this.setCameraPosition(this.focusPlanet.pos);
+        this.setCameraPosition(this.focusPlanet.pos);
         if (this.autoFocus) {
           const target = this.autoFocus.targetZoom;
           const current = this.camera.zoom;
@@ -1279,11 +1335,13 @@ export class UniverseApp {
             this.autoFocus = null;
           }
         }
-      } else if (this.settings.followShip) {
-  this.setCameraPosition(this.playerShip.pos);
+      } else {
+        this._updateCameraFollow(dt);
       }
 
       this._syncRemoteShipsToScene();
+
+      this._updateAutoViewFromZoom();
 
       if (this.view === ViewMode.Space) {
         this.renderer.frame(dt, this.ships);
@@ -1328,47 +1386,53 @@ export class UniverseApp {
   // region --- Landing & presence -----------------------------------------------------------
 
   private _canLandHere(): boolean {
+    if (this.view !== ViewMode.Space) {
+      return false;
+    }
     if (!this.settings.renderPlanets) {
       return false;
     }
-    const list = this.renderer.visiblePlanetsScreen;
-    const cx = (this.canvas.width / (window.devicePixelRatio || 1)) / 2;
-    const cy = (this.canvas.height / (window.devicePixelRatio || 1)) / 2;
-    let best: (typeof list)[number] | null = null;
-    let bestDistance = Number.POSITIVE_INFINITY;
-    for (const entry of list) {
-      const distance = Math.hypot(entry.x - cx, entry.y - cy) - entry.r;
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        best = entry;
-      }
+    const candidate = this._findCenteredBody();
+    if (!candidate) {
+      return false;
     }
-    return Boolean(best && bestDistance < LAND_DISTANCE_THRESHOLD);
+    return this._shipNearBody(candidate);
   }
 
   private _tryLand(): void {
-    if (!this._canLandHere()) {
+    const candidate = this._findCenteredBody();
+    if (!candidate) {
       return;
     }
-    const cx = (this.canvas.width / (window.devicePixelRatio || 1)) / 2;
-    const cy = (this.canvas.height / (window.devicePixelRatio || 1)) / 2;
-    const pick = this.pickPlanetOrMoonAt(cx, cy);
-    if (!pick) {
+    if (!this._shipNearBody(candidate)) {
+      this._appendChatSystem('Du bist zu weit entfernt, um zu landen.');
       return;
     }
 
+    const target: FocusTarget =
+      candidate.kind === 'planet'
+        ? { kind: 'planet', planet: candidate.obj }
+        : { kind: 'moon', planet: candidate.obj.planet, moon: candidate.obj.moon };
+
+    this._focusBody(target, false);
+    this.currentId = target.kind === 'planet' ? target.planet.id : target.moon.id;
+    this._setHash(this.currentId);
+    this._applySurfaceTarget(target);
+    this.autoFocus = null;
+    this._switchView(ViewMode.Surface);
+  }
+
+  private _applySurfaceTarget(target: FocusTarget): void {
     let bodyName = 'Körper';
     let bodyType = 'planetar';
     let gravity = 9.8;
 
-    if (pick.kind === 'planet') {
-      const planet = pick.obj;
-      bodyName = planet.name;
-      bodyType = planet.type;
-      gravity = planet.gravity || 9.8;
-    } else if (pick.kind === 'moon') {
-      const planet = pick.obj.planet;
-      const moon = pick.obj.moon;
+    if (target.kind === 'planet') {
+      bodyName = target.planet.name;
+      bodyType = target.planet.type;
+      gravity = target.planet.gravity || 9.8;
+    } else {
+      const { planet, moon } = target;
       bodyName = `${planet.name} – Mond ${moon.index + 1}`;
       bodyType = 'Mond';
       gravity = (planet.gravity || 9.8) * 0.16;
@@ -1381,9 +1445,51 @@ export class UniverseApp {
     this.surface.avatar.px = pad.x;
     this.surface.avatar.py = pad.y;
     this.surface.avatar.path = [];
-    this.view = ViewMode.Surface;
-    this._updateViewSwitch?.();
-    this._sendPresence();
+  }
+
+  private _enterSurfaceFromFocus(): void {
+    if (this.view !== ViewMode.Space) {
+      return;
+    }
+    const target = this.focusTarget;
+    if (!target) {
+      return;
+    }
+    this._applySurfaceTarget(target);
+    this.autoFocus = null;
+    this._switchView(ViewMode.Surface);
+  }
+
+  private _findCenteredBody(): ReturnType<UniverseApp['pickPlanetOrMoonAt']> {
+    const dpr = window.devicePixelRatio || 1;
+    const cx = (this.canvas.width / dpr) / 2;
+    const cy = (this.canvas.height / dpr) / 2;
+    return this.pickPlanetOrMoonAt(cx, cy);
+  }
+
+  private _shipNearBody(candidate: NonNullable<ReturnType<UniverseApp['pickPlanetOrMoonAt']>>): boolean {
+    const shipX = this.playerShip.pos.x;
+    const shipY = this.playerShip.pos.y;
+
+    let bodyX: number;
+    let bodyY: number;
+    let bodyRadius: number;
+
+    if (candidate.kind === 'planet') {
+      bodyX = candidate.obj.pos.x;
+      bodyY = candidate.obj.pos.y;
+      bodyRadius = candidate.obj.radius;
+    } else {
+      const { planet, moon } = candidate.obj;
+      const orbitRadius = planet.radius + moon.dist;
+      bodyX = planet.pos.x + Math.cos(moon.ang) * orbitRadius;
+      bodyY = planet.pos.y + Math.sin(moon.ang) * orbitRadius;
+      bodyRadius = moon.r;
+    }
+
+    const distance = Math.hypot(shipX - bodyX, shipY - bodyY);
+    const distanceToSurface = Math.max(0, distance - bodyRadius);
+    return distanceToSurface <= LAND_SHIP_DISTANCE;
   }
 
   private pickPlanetOrMoonAt(cx: number, cy: number) {
@@ -1606,8 +1712,50 @@ export class UniverseApp {
 
   // region --- InputController delegate -----------------------------------------------------
 
+  onZoom(info: ZoomInfo): void {
+    this.autoFocus = null;
+    if (this.view === ViewMode.Interior) {
+      if (info.delta > 0) {
+        this._disableAutoFollowWithCooldown();
+        if (this._viewWidthWu() >= SHIP_INTERIOR_EXIT_VIEW_WIDTH) {
+          this._switchView(ViewMode.Space);
+        }
+      }
+      return;
+    }
+
+    if (this.view === ViewMode.Surface) {
+      if (info.delta > 0) {
+        this._disableAutoFollowWithCooldown();
+        if (this._viewWidthWu() >= PLANET_SURFACE_EXIT_VIEW_WIDTH) {
+          this.autoFocus = null;
+          this._switchView(ViewMode.Space);
+        }
+      }
+      return;
+    }
+
+    if (this.view !== ViewMode.Space) {
+      return;
+    }
+
+    if (this._autoFollowActive) {
+      if (info.delta > 0) {
+        this._disableAutoFollowWithCooldown();
+      } else if (info.delta < 0) {
+        const pointerDist = Math.hypot(info.worldBefore.x - this.playerShip.pos.x, info.worldBefore.y - this.playerShip.pos.y);
+        if (pointerDist > SHIP_PROXIMITY_THRESHOLD * 0.75) {
+          this._disableAutoFollowWithCooldown();
+        }
+      }
+    }
+  }
+
   onDrag(dx: number, _dy: number, _event: MouseEvent | TouchEvent): boolean {
     if (!this.focusPlanet) {
+      if (this.view === ViewMode.Space) {
+        this._disableAutoFollowWithCooldown();
+      }
       return false;
     }
     if (this.camera.zoom < 4) {
